@@ -17,7 +17,7 @@ ROOT = os.path.relpath(os.path.dirname(__file__))
 
 def get_extensions():
     sources = ["podi_cython.pyx", "sigma_clip_mean.c", "sigma_clip_median.c"]
-    include_dirs = ['numpy', ]
+    include_dirs = ['numpy', os.path.dirname(__file__)]
 
     exts = [
         Extension(name='postcalib.qr.podi_cython',
