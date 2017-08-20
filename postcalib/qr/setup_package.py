@@ -27,7 +27,10 @@ def get_extensions():
                   )
     ]
 
-    return exts
+    if os.environ.get('READTHEDOCS', False):
+        return []
+    else:
+        return exts
 
 
 def requires_2to3():
