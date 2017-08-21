@@ -14,5 +14,3 @@ dependencies:
     - shutilwhich
     - pyregion
     - lmfit
-    - pip
-        - ruffus
