@@ -89,7 +89,7 @@ class Mock(object):
             return Mock()
 
 
-MOCK_MODULES = ['ruffus', ]
+MOCK_MODULES = ['ruffus', 'shutilwhich']
 for mod_name in MOCK_MODULES:
     sys.modules[mod_name] = Mock()
 
