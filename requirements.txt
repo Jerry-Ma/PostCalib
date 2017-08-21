@@ -9,3 +9,4 @@ pyregion
 astropy
 numpy
 lmfit
+pyyaml
