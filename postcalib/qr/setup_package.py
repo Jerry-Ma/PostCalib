@@ -17,7 +17,7 @@ ROOT = os.path.relpath(os.path.dirname(__file__))
 
 def get_extensions():
     sources = ["podi_cython.pyx", "sigma_clip_mean.c", "sigma_clip_median.c"]
-    include_dirs = ['numpy', os.path.dirname(__file__)]
+    include_dirs = ['numpy', ]
 
     exts = [
         Extension(name='postcalib.qr.podi_cython',
@@ -27,10 +27,7 @@ def get_extensions():
                   )
     ]
 
-    if os.environ.get('READTHEDOCS', False):
-        return []
-    else:
-        return exts
+    return exts
 
 
 def requires_2to3():
