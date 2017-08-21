@@ -36,7 +36,7 @@ Using pip
 
 .. code-block:: bash
 
-   $ pip install https://github.com/astropy/astroquery/archive/master.zip
+   $ pip install https://github.com/Jerry-Ma/PostCalib/archive/master.zip
 
 
 Building from source
@@ -114,7 +114,7 @@ Pipeline
 For more on the details of the pipeline steps, check the pipeline document:
 
 .. toctree::
-    :maxdepth: 1
+    :maxdepth: 5
 
     postcalib/pipeline.rst
 
@@ -129,6 +129,15 @@ For a comprehensive listing of the command line options, see:
     :maxdepth: 1
 
     postcalib/commandline.rst
+
+For the documentation of PostCalib, check:
+
+
+.. toctree::
+    :maxdepth: 10
+
+    postcalib/index.rst
+
 
 License
 =======

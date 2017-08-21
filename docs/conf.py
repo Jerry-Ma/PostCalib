@@ -89,14 +89,24 @@ class Mock(object):
             return Mock()
 
 
-MOCK_MODULES = ['ruffus', 'shutilwhich']
+# MOCK_MODULES = ['ruffus', 'shutilwhich', 'postcalib.qr.podi_cython.sigma_clip_median']
+MOCK_MODULES = []
 for mod_name in MOCK_MODULES:
     sys.modules[mod_name] = Mock()
+
+intersphinx_mapping = {
+    'python': ('http://docs.python.org/', None),
+    'numpy': ('http://docs.scipy.org/doc/numpy/', None),
+    'scipy': ('http://docs.scipy.org/doc/scipy/reference/', None),
+    'matplotlib': ('http://matplotlib.org/', None),
+    'astropy': ('http://docs.astropy.org/en/stable/', None)
+    }
 
 # -- Project information ------------------------------------------------------
 
 # This does not *have* to match the package name, but typically does
-project = setup_cfg['package_name']
+# project = setup_cfg['package_name']
+project = 'PostCalib'
 author = setup_cfg['author']
 copyright = '{0}, {1}'.format(
     datetime.datetime.now().year, setup_cfg['author'])

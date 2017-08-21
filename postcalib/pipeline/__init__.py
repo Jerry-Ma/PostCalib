@@ -13,17 +13,19 @@ from __future__ import (absolute_import, division, print_function)
 import os
 import re
 import sys
-from . import prep_grouping
-from . import prep_mask_otas
-from . import prep_get_refcat
-from . import sky_mask_objects
-from . import sky_combine
-from . import sky_subtract
-from . import phot_calib
-from . import phot_mosaic
 
 
 def get_tlist(config):
+
+    from . import prep_grouping
+    from . import prep_mask_otas
+    from . import prep_get_refcat
+    from . import sky_mask_objects
+    from . import sky_combine
+    from . import sky_subtract
+    from . import phot_calib
+    from . import phot_mosaic
+
     t00 = dict(
         name='select images',
         func=prep_mask_otas.select_images,
