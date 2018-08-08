@@ -27,6 +27,10 @@ from datetime import timedelta
 from functools import reduce
 # from collections import Iterable
 # from tempfile import NamedTemporaryFile
+from . import utils
+from .utils import ensure_list, unwrap_if_len_one, ensure_args_as_list
+from . import astromatic as am
+from . import common
 
 import ruffus
 import ruffus.cmdline as cmdline
@@ -38,11 +42,6 @@ from ruffus import formatter
 # from ruffus import add_inputs
 from ruffus import output_from
 from ruffus.ruffus_exceptions import error_ambiguous_task
-
-from . import utils
-from .utils import ensure_list, unwrap_if_len_one, ensure_args_as_list
-from . import astromatic as am
-from . import common
 
 
 class ApusConfig(object):
@@ -311,7 +310,7 @@ def create_ruffus_task(pipe, config, task, **kwargs):
         task['params'] = am.normalize_params(task.get('params', {}))
         # generate configuration file if not supplied
         if 'conf' not in ensure_list(task.get('in_keys', None)) or \
-                task.get('auto_conf', False):
+                task.get('auto_conf', True):
             pre_task = {
                 'name': 'autoconf {0}'.format(task_name),
                 'func': dump_config_files,
@@ -337,7 +336,7 @@ def create_ruffus_task(pipe, config, task, **kwargs):
             # conf_inputs.append(os.path.abspath(pre_task['out']))
             # task_inkeys.append('conf')
             conf_inputs = ensure_list(task.get('add_inputs', None))
-            conf_inputs.append(os.path.abspath(pre_task['out']))
+            conf_inputs.insert(0, os.path.abspath(pre_task['out']))
             task_inkeys = copy(task.get('in_keys', ['in', ]))
             _inkeys = ['in', 'in+']
             for i, key in enumerate(task_inkeys):
@@ -346,7 +345,14 @@ def create_ruffus_task(pipe, config, task, **kwargs):
                     break
                 elif isinstance(key, tuple) and \
                         any(j in _inkeys for j in key):
-                    task_inkeys[i] = key + ('conf', )
+                    _keys = list(key)
+                    _keys.insert(1 - len(conf_inputs), 'conf')
+                    task_inkeys[i] = tuple(_keys)
+                    break
+                elif isinstance(key, list) and \
+                        any(j in _inkeys for j in key):
+                    _keys = tuple(key + ['conf', ])
+                    task_inkeys[i] = _keys
                     break
             task['add_inputs'] = conf_inputs
             task['in_keys'] = task_inkeys
@@ -579,12 +585,25 @@ def to_callable_task_args(conv_func):
                 in_files, out_files, extras = [], in_files, out_files
             in_files += extras[:-1]
             out_files, flag_file = get_flag_file(out_files)
+            # flatten any third level list
+            for i, in_ in enumerate(in_files):
+                if isinstance(in_, tuple):
+                    _in_ = []
+                    for item in in_:
+                        if isinstance(item, list):
+                            _in_.extend(item)
+                        else:
+                            _in_.append(item)
+                    in_files[i] = tuple(_in_)
             # print(in_files, out_files)
-            overlap = list(set(in_files).intersection(set(out_files)))
-            if len(overlap) > 0:
-                raise RuntimeError(
-                        'danger: output {0} has same filename as inputs'
-                        .format(unwrap_if_len_one(overlap)))
+            try:
+                overlap = list(set(in_files).intersection(set(out_files)))
+                if len(overlap) > 0:
+                    raise RuntimeError(
+                            'danger: output {0} has same filename as inputs'
+                            .format(unwrap_if_len_one(overlap)))
+            except TypeError:
+                pass
             context = copy(extras[-1])
             context['flag_file'] = flag_file
             if conv_func is not None:
@@ -655,7 +674,7 @@ def _astromatic_callable(in_files, out_files, context):
             'scamp': [],
             'swarp': ['IMAGEOUT_NAME', 'WEIGHTOUT_NAME']
             }
-    out_keys = task.get('out_keys', default_outkeys[prog])
+    out_keys = ensure_list(task.get('out_keys', default_outkeys[prog]))
     for i, key in enumerate(out_keys):
         command.extend(['-{0}'.format(key), out_files[i]])
     return documented_subprocess_call(command, flag_file=context['flag_file'])
@@ -685,6 +704,8 @@ def get_astromatic_inputs(inputs, in_keys):
 
     # ret:
     #   [(key1, [in1, in2, .. ]), (key2, [add1_1, add1_2 ..])
+    # print(inputs)
+    # print(in_keys)
     ret_keys = []
     ret_vals = []
     # expand in+
@@ -701,8 +722,8 @@ def get_astromatic_inputs(inputs, in_keys):
             if len(key) == len(val):
                 for k, vv in zip(key, val):
                     if isinstance(vv, tuple):
-                        vv = tuple(set(vv))
-                        vv = vv[0] if len(vv) == 1 else vv
+                        _v = tuple(set(vv))
+                        vv = _v[0] if len(_v) == 1 else vv
                     ret_keys.append(k)
                     ret_vals.append(vv)
             else:
@@ -721,6 +742,7 @@ def get_astromatic_inputs(inputs, in_keys):
     for i, key in enumerate(ret_keys):
         ag_vals[ag_keys.index(key)].append(ret_vals[i])
     for i, val in enumerate(ag_vals):
+        # print(i, val)
         # validate list-type keys
         if any([isinstance(v, tuple) for v in val]):
             if len(val) > 1:
@@ -754,6 +776,8 @@ def callable_task(in_files, out_files, context):
             logger=context['logger'],
             logger_mutex=context['logger_mutex'])
     output = func(*args, **kwargs)
+    if task.get('after_func', None) is not None:
+        task['after_func'](*out_files)
     flag_file = context['flag_file']
     if flag_file is not None:
         common.touch_file(flag_file)
