@@ -230,13 +230,16 @@ fmt_photcat_matched: '{{ppflag}}{{imflag}}_{base_fmt:s}.zp.cat'
 fmt_phot: '{{ppflag}}odi_{{band}}.cat'
 reg_phot: '{reg_phot:s}'  # regex to parse grouped phot master
 phot_hdr_suffix: 'hdr_phot'
-phot_hdr_glob: 'phot[0-9]_*{{obsid}}*odi_{{band}}.hdr_phot'
+phot_hdr_glob: 'phot[0-9]*_*{{obsid}}*odi_{{band}}.hdr_phot'
 
 sel_mosaic: 'mosaic[0-9]*_*_*.fits'
 fmt_mosaic_orig: 'swarp{{grpid}}_{{imflag}}_odi_{{band}}.fits'
+fmt_mosaic_hdr: 'coadd{{grpid}}.mosaic'
 fmt_mosaic: 'coadd{{grpid}}_{{imflag}}_odi_{{band}}.fits'
 fmt_mosaic_wht: 'coadd{{grpid}}_{{imflag}}_odi_{{band}}.wht.fits'
 reg_mosaic: {reg_mosaic:s}
+reg_mosaic_fits: {reg_mosaic_fits:s}
+fmt_msccat_matched: 'coadd{{grpid}}{{imflag}}_odi_{{band}}.zp.cat'
 
 reg_grp: '{reg_grp:s}'  # regex to parse grouped images
 fmt_grp: '{{ppflag}}{{grpid}}_{{imflag}}_{base_fmt:s}.fits'
@@ -266,7 +269,10 @@ funpack_cmd: {funpack_cmd}
            reg_phot=r'(?P<ppflag>[^_/]+)_odi_(?P<band>[ugriz])'
                     r'\.(?P<ext>[^/]+)',
            reg_mosaic=r'(?P<ppflag>[a-z]+)(?P<grpid>\d+)_(?P<imflag>[^_/]+)'
-                      r'_odi_(?P<band>[ugriz]).fits',
+                      r'_odi_(?P<band>[ugriz])\.(?P<ext>[^/]+)$',
+           reg_mosaic_fits=r'(?P<ppflag>[a-z]+)(?P<grpid>\d+)'
+                           r'_(?P<imflag>[^_/]+)'
+                           r'_odi_(?P<band>[ugriz])\.fits$',
            reg_grp=r'(?P<ppflag>[a-z]+)(?P<grpid>\d+)_(?P<imflag>[^_/]+)_'
                     r'(?P<obsid>20\d{6}T\d{6}\.\d)_(?P<object>.+?)'
                     r'_odi_(?P<band>[ugriz])'
@@ -301,27 +307,30 @@ def _qa_worker(image, config):
     """Create a QA summary for given input image"""
     headers = config['qa_headers']
     values = []
-    with fits.open(image, memmap=True) as hdulist:
-        for key in headers:
-            try:
-                val = hdulist[0].header[key]
-            except KeyError:
-                val = hdulist[1].header[key]
-            except KeyError:
-                val = ""
-            if key == "OBJECT":
-                # escape name
-                val = re.sub(r'\s+', '_', val.strip())
-            values.append(val)
-        # QA image
-        preview = qa.create_preview(hdulist=hdulist)
-        preview.save()
-        # mask guide ota
-        values.insert(0, ','.join(map(str, preview.guide_otas)))
-        # append filename
-        values.append(image)
-    keys = ['mask_otas', ] + headers + ['filename', ]
-    return keys, values
+    try:
+        with fits.open(image, memmap=True) as hdulist:
+            for key in headers:
+                try:
+                    val = hdulist[0].header[key]
+                except KeyError:
+                    val = hdulist[1].header[key]
+                except KeyError:
+                    val = ""
+                if key == "OBJECT":
+                    # escape name
+                    val = re.sub(r'\s+', '_', val.strip())
+                values.append(val)
+            # QA image
+            preview = qa.create_preview(hdulist=hdulist)
+            preview.save()
+            # mask guide ota
+            values.insert(0, ','.join(map(str, preview.guide_otas)))
+            # append filename
+            values.append(image)
+        keys = ['mask_otas', ] + headers + ['filename', ]
+        return keys, values
+    except:
+        return None, None
 
 
 def init_job(config_file, jobkey, images,
@@ -364,7 +373,8 @@ def init_job(config_file, jobkey, images,
                 logger.warning("x {}".format(filename))
                 os.unlink(filename)
                 # remove preview files if any
-                previewname = filename.rstrip(".fz").rstrip(".fits") + '.png'
+                previewname = filename.rsplit(".fz", 1)[0].rsplit(
+                        ".fits", 1)[0] + '.png'
                 if os.path.exists(previewname) and not os.path.islink(
                         previewname):
                     logger.warning("x {}".format(previewname))
@@ -389,10 +399,19 @@ def init_job(config_file, jobkey, images,
         logger.info("{} input images linked".format(len(images)))
 
         # run QA
+        # pool = Pool(1)
         pool = Pool(cpu_count())
-        qa_keys, qa_vals = zip(*pool.map_async(
+        qa_rets = pool.map_async(
                 partial(_qa_worker,  config=config),
-                images).get(9999999))
+                images).get(9999999)
+        qa_keys = []
+        qa_vals = []
+        for i, (k, v) in enumerate(qa_rets):
+            if k is None:
+                logger.warning("corrupted: {}".format(images[i]))
+            else:
+                qa_keys.append(k)
+                qa_vals.append(v)
         # tabulate QA results
         qa_tbl = Table(
                 rows=qa_vals, names=qa_keys[0],
@@ -510,6 +529,7 @@ def run_pipeline(config_file, jobfile, apus_args=None):
     config['jobfile'] = jobfile
     config['jobkey'] = jobkey
     config['skymask_dir'] = jobdir + ".skymask"
+    config['bpmask_dir'] = jobdir + ".bpmask"
 
     logger.info("arguments passed to Apus {}".format(apus_args))
     logger.propagate = False
