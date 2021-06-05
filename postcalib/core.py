@@ -22,7 +22,7 @@ from astropy.io import fits
 from astropy.table import Table, Column, unique
 from multiprocessing import Pool, cpu_count
 from functools import partial
-import StringIO
+from io import StringIO
 
 
 from . import qa
@@ -329,7 +329,8 @@ def _qa_worker(image, config):
             values.append(image)
         keys = ['mask_otas', ] + headers + ['filename', ]
         return keys, values
-    except:
+    except Exception as e:
+        raise e
         return None, None
 
 
@@ -404,6 +405,10 @@ def init_job(config_file, jobkey, images,
         qa_rets = pool.map_async(
                 partial(_qa_worker,  config=config),
                 images).get(9999999)
+        # qa_rets = []
+        # for image in qa_images:
+        #     qa_rets.append(_qa_worker(image, config=config))
+
         qa_keys = []
         qa_vals = []
         for i, (k, v) in enumerate(qa_rets):
@@ -439,7 +444,7 @@ def init_job(config_file, jobkey, images,
                 return "\"{}\"".format(x)
             else:
                 return x
-        _fo = StringIO.StringIO()
+        _fo = StringIO()
         qa_tbl.write(_fo, format='ascii.fixed_width', delimiter=" ",
                      formats={c: quote for c in qa_tbl.colnames})
         with open(tblname, 'w') as fo:
@@ -525,8 +530,18 @@ def run_pipeline(config_file, jobfile, apus_args=None):
         os.makedirs(jobdir)
         logger.info("create job inputs dir {}".format(jobdir))
 
+    # create job config if not exists
+    job_configfile = os.path.join(workdir, f'{jobkey}.yaml')
+    if not os.path.exists(job_configfile):
+        touch_file(job_configfile)
+    with open(job_configfile, 'r') as fo:
+        jobconfig = yaml.load(fo)
+        if jobconfig is None:
+            jobconfig = dict()
+
     config['jobdir'] = jobdir
     config['jobfile'] = jobfile
+    config['jobconfig'] = jobconfig
     config['jobkey'] = jobkey
     config['skymask_dir'] = jobdir + ".skymask"
     config['bpmask_dir'] = jobdir + ".bpmask"

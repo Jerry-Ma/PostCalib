@@ -16,7 +16,7 @@ from astropy.visualization import ZScaleInterval  # , PercentileInterval
 from astropy.visualization.mpl_normalize import ImageNormalize
 import numpy as np
 from astropy.io import fits
-from astropy.stats import sigma_clip
+from astropy.stats import sigma_clip  # , mad_std
 import itertools
 
 import matplotlib
@@ -62,7 +62,8 @@ def create_preview(hdulist=None, binning=8, filename=None, delete_data=True):
         close_after = False
     else:
         raise ValueError("there has to be at least one of hdulist or filename")
-    filenamebase = os.path.basename(filename).rstrip(".fz").rstrip(".fits")
+    filenamebase = os.path.basename(filename).rsplit(".fz", 1)[0].rsplit(
+            ".fits", 1)[0]
     dirname = os.path.dirname(filename)
 
     logger.info("create preview for {}".format(filename))
@@ -77,7 +78,8 @@ def create_preview(hdulist=None, binning=8, filename=None, delete_data=True):
     preview_data = np.empty((size_y, size_x), dtype='f') * np.NAN
     binned_data = []
     for ext, hdu in layout.enumerate(hdulist):
-        bin_shape = map(int, (layout.OH, binning, layout.OW, binning))
+        bin_shape = list(
+                map(int, (layout.OH, binning, layout.OW, binning)))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             binned = np.nanmean(
@@ -102,7 +104,7 @@ def create_preview(hdulist=None, binning=8, filename=None, delete_data=True):
             del hdu.data  # possibly free some memory
     binned_data = np.dstack(binned_data)
 
-    guide_otas = find_guide_otas(binned_data, layout, thresh=10)
+    guide_otas = find_guide_otas(binned_data, layout, thresh=10, logger=logger)
 
     # preview figure
     fig = plt.figure(figsize=(2 * layout.n_ota_x, 2 * layout.n_ota_y))
@@ -130,7 +132,7 @@ def create_preview(hdulist=None, binning=8, filename=None, delete_data=True):
     return pr
 
 
-def find_guide_otas(data, layout, thresh=10):
+def find_guide_otas(data, layout, thresh=10, logger=None):
     if layout.instru == 'podi':
         return []
     centers = []
@@ -158,9 +160,11 @@ def find_guide_otas(data, layout, thresh=10):
         _data = data[:, :, i]
         center_data = sigma_clip(
                 _data[(mask == 1) & (~np.isnan(_data))],
+                # stdfunc=mad_std,
                 sigma=3)
         corner_data = sigma_clip(
                 _data[(mask == 0) & (~np.isnan(_data))],
+                # stdfunc=mad_std,
                 sigma=3)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
@@ -170,7 +174,21 @@ def find_guide_otas(data, layout, thresh=10):
         otas.append(layout.get_ext_ota(i + 1))
         # print("OTA {} has corner excess {}".format(
         #     layout.get_ext_ota(i + 1), offset))
-    return [o for i, o in enumerate(otas) if offsets[i] > thresh]
+    guide_otas = [o for i, o in enumerate(otas) if offsets[i] > thresh]
+    if len(guide_otas) == 0:
+        if logger is None:
+            def log(mesg):
+                print(mesg)
+        else:
+            log = logger.warning
+        guide_otas = sorted(otas, key=lambda o: offsets[otas.index(o)])[-1:]
+        log("unable to locate guide ota,"
+            " use the most likely one with thresh {}".format(
+                offsets[otas.index(guide_otas[0])]))
+        # log("thresholds:\n{}".format("\n".join(
+        #     '{}: {}'.format(otaxy, thresh) for otaxy, thresh in zip(
+        #         layout.ota_order, offsets))))
+    return guide_otas
 
 
 # if __name__ == "__main__":

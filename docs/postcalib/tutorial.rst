@@ -230,32 +230,33 @@ collating the inputs in performing various operations:
     1. `fcomb_group`:
         This group is used to indicate how the images are grouped for
         creating the fringe/pupil ghost template.
-        In the example above, all the values are 0 therefore only
+        In the example above, all the values are 0, therefore, only
         one template will be created (identified as `fcomb0`) using
         all the images listed as inputs.
-        A value of -1 indicate that the image does not go into this
-        the combination process.
+        A value of -1 indicates that the image does not go into
+        the combining process.
     2. `fsub_group`:
-        Similar to `fcomb_group`, but for specifing which image to
+        Similar to `fcomb_group`, but for specifying which image to
         subtract which template. The values in this column should
         always be present in the `fcomb_group` column.
     3. `phot_group`:
-        This group is used to select images that performs the
-        Mininizedr-chisq self-calibration together.
-    4. `mosaic-Group` is use to specify what images are to be
-           combined to craete the final stack(s).
+        This group is used to select images that go into the same
+        photometric calibration process.
+    4. `mosaic_group`:
+        This group is used to specify how images are to be combined to create
+        the final stack(s).
 
-Thanks to the help of Apus/Ruffus, which provides the check-pointing
-for the pipeline execution. This means that only the files
-that are affected by the changed values of the table are get re-computed
-and updated, which allows the user spend more time in checking and
-optimizing there selection of images.
 
-Once we finished editing the job tablea, it is time to issue the
+Thanks to Apus/Ruffus, PostCalib provides a check-pointing functionality for
+the pipeline execution. This means that only the files that are affected by the
+changed values of the job table are get re-computed and updated. This allows
+the user spend more time in checking the results and optimizing the job table.
+
+Once we finish editing the job table, it is the time to issue the
 command `$ postcalib run <JOB_TASBLE>` to execute the pipeline.
 
-The pipeline can be controled by a more-or-less independent, but rich
-command line arguments, provided by `Ruffus`, the pipeline backend.
+The pipeline can be controlled by a more-or-less independent, but rich
+command line arguments, provided by `Apus/Ruffus`, the pipeline back-end.
 
 Here are some exampled usage:
 
@@ -299,7 +300,7 @@ Further Readings
 Example
 ^^^^^^^
 
-For a walk-through of a real world example, check:
+For a walk-through of a real-world example, check:
 
 .. toctree::
     :maxdepth: 1
@@ -316,6 +317,3 @@ For the details of the pipeline steps, refer to:
     :maxdepth: 1
 
     pipeline.rst
-
-
-

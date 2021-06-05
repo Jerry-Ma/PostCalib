@@ -109,7 +109,7 @@ class ODILayoutInstruMixin(object):
         '''return the extension of ota'''
         return self.ota_order.index(int(ota)) + 1
 
-    def get_sky_footprint(self, center=None):
+    def get_sky_footprint_bbox(self, center=None):
         '''return range of ra and dec for image'''
         if center is None:
             ra = dec = 0
@@ -118,6 +118,17 @@ class ODILayoutInstruMixin(object):
         cosdec = np.cos(dec * np.pi / 180.)
         w, e, s, n = self.bbox
         return ra + w / cosdec, ra + e / cosdec, dec + s, dec + n
+
+    def get_sky_footprint(self, center=None):
+        return self.get_sky_footprint_bbox(center=center)
+
+    def get_sky_footprint_cbox(self, center=None):
+        w, e, s, n = self.get_sky_footprint_bbox(center=center)
+        cra = (w + e) * 0.5
+        cdec = (s + n) * 0.5
+        dra = (e - w) * np.cos(cdec * np.pi / 180.)
+        ddec = (n - s)
+        return cra, cdec, dra, ddec
 
     def enumerate(self, hdulist):
         ext = 1

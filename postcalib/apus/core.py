@@ -10,7 +10,6 @@ core.py
 """
 
 from __future__ import (absolute_import, division, print_function)
-from astropy.extern import six
 
 import os
 import re
@@ -18,8 +17,8 @@ import sys
 import glob
 import time
 import logging
-import cPickle as pickle
-from StringIO import StringIO
+import pickle
+from io import StringIO
 import subprocess
 from copy import copy
 from functools import wraps    # enable pickling of decorator
@@ -73,7 +72,7 @@ class ApusConfig(object):
             except AttributeError:
                 if defval is None and key not in dict(self.runtime).keys():
                     raise RuntimeError(missingkeyerror.format(key))
-                elif isinstance(defval, six.string_types):
+                elif isinstance(defval, str):
                     val = defval.format(**self.__dict__)
                 else:
                     val = defval
@@ -195,7 +194,7 @@ def get_task_func(func):
     Return pipeline function to be executed for a given task func
     """
     errmsg = 'not a meaningful task func value: {0}'.format(func)
-    if isinstance(func, six.string_types):
+    if isinstance(func, str):
         if func.lower() in ['sex', 'scamp', 'swarp']:
             return astromatic_task
         else:
@@ -246,7 +245,7 @@ def aggregate_task_inputs(inputs):
             formatter_inputs.append(in_)
         elif isinstance(in_, list):
             simple_inputs.extend(in_)
-        elif isinstance(in_, six.string_types + (dict, )):
+        elif isinstance(in_, (str, dict, )):
             simple_inputs.append(in_)
         else:
             raise RuntimeError('invalid input {0}'.format(in_))
@@ -363,7 +362,7 @@ def create_ruffus_task(pipe, config, task, **kwargs):
             aggregate_task_inputs(
                 ensure_list(task.get(in_, []), tuple_ok=False))
         if len(generator_inputs) > 0:  # generator_inputs goes to unnamed arg
-                task_args.extend(generator_inputs)
+            task_args.extend(generator_inputs)
         # simple_inputs get common general formatter
         if len(simple_inputs) > 0:
             formatter_inputs.append((simple_inputs, r'.+'))
@@ -418,7 +417,7 @@ def create_ruffus_task(pipe, config, task, **kwargs):
         task_inkey = []
         for in_ in ensure_list(task.get(inkey, None)):
             in_ = resolve_task_name(in_)
-            if isinstance(in_, six.string_types) and not os.path.isabs(in_):
+            if isinstance(in_, str) and not os.path.isabs(in_):
                 in_ = os.path.join(config.task_io_default_dir, in_)
             task_inkey.append(in_)
         if len(task_inkey) > 0:
@@ -718,7 +717,7 @@ def get_astromatic_inputs(inputs, in_keys):
     for key, val in zip(in_keys, inputs):
         if isinstance(key, tuple):  # deal with tuple keys:
             if all(isinstance(v, tuple) for v in val):
-                val = zip(*val)  # tuple of tuple, need to be zipped
+                val = list(zip(*val))  # tuple of tuple, need to be zipped
             if len(key) == len(val):
                 for k, vv in zip(key, val):
                     if isinstance(vv, tuple):
@@ -806,7 +805,8 @@ def dump_config_files(conf_file, checker_file, **kwargs):
                 params_file = conf_file + '.sexparam'
                 with logger_mutex:
                     logger.info('params file: {0}'.format(params_file))
-                fo = StringIO(subprocess.check_output([am_bin, '-dp']))
+                fo = StringIO(
+                        subprocess.check_output([am_bin, '-dp']).decode())
                 am.dump_sex_param(
                         fo, params_file, amconf.get('sexparam_default'),
                         params_file_keys, overwrite=True)
@@ -838,7 +838,7 @@ def dump_config_files(conf_file, checker_file, **kwargs):
             else:
                 conf_params[k] = v
     # create conf file
-    fo = StringIO(subprocess.check_output([am_bin, '-dd']))
+    fo = StringIO(subprocess.check_output([am_bin, '-dd']).decode())
     am.dump_astromatic_conf(fo, conf_file, overwrite=True, **conf_params)
     with logger_mutex:
         logger.info('conf file: {0}'.format(conf_file))
@@ -848,7 +848,7 @@ def dump_config_files(conf_file, checker_file, **kwargs):
             logger.info('{0:>20s}: {1:s}'.format(k, v))
     fo.close()
     # write checker file
-    with open(checker_file, 'w') as fo:
+    with open(checker_file, 'wb') as fo:
         pickle.dump(task.get('params', {}), fo)
         pickle.dump(task.get('outparams', {}), fo)
 
@@ -859,7 +859,7 @@ def check_config_uptodate(*args, **kwargs):
         if not os.path.isfile(f):
             return True, "missing file {0}".format(f)
     task = context['task']
-    with open(checker_file, 'r') as fo:
+    with open(checker_file, 'rb') as fo:
         try:
             old_params = pickle.load(fo)
             old_outparams = pickle.load(fo)

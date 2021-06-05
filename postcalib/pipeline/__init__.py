@@ -13,6 +13,7 @@ from __future__ import (absolute_import, division, print_function)
 import os
 import re
 import sys
+from functools import partial
 
 
 def get_tlist(config):
@@ -54,6 +55,7 @@ def get_tlist(config):
             "reg_inputs": config['reg_inputs'],
             "fmt_masked": config['fmt_masked'],
             "funpack_cmd": config['funpack_cmd'],
+            "bpmdir": config['bpmask_dir']
             },
         follows=t00,
         )
@@ -66,7 +68,8 @@ def get_tlist(config):
         out='refcat_{object[0]}.cat',
         kwargs={
             "stilts_cmd": config['stilts_cmd'],
-            }
+            },
+        jobs_limit=1
             )
     t15 = dict(
         name='merge refcats',
@@ -219,7 +222,7 @@ def get_tlist(config):
         in_=(t41, config['reg_inputs']),
         replace_inputs=[t42['out'], t10['out'], '{basename[0]}.fits'],
         out=fmtname(config['fmt_photcat_matched']),
-        follows=t10,
+        follows=[t10, t42],
         kwargs={
             'reg_inputs': config['reg_inputs'],
             'stilts_cmd': config['stilts_cmd'],
@@ -237,7 +240,8 @@ def get_tlist(config):
             'phot_model_flags': config['phot_model_flags'],
             'phot_hdr_suffix': config['phot_hdr_suffix'],
             },
-        follows=[t43, t40]
+        follows=t43,
+        jobs_limit=1,
             )
     t50 = dict(
         name='select mosaic',
@@ -257,7 +261,7 @@ def get_tlist(config):
         follows=[t01, t31],
             )
     t51 = dict(
-        name='get mschdr',
+        name='get calhdr',
         func=phot_mosaic.get_header,
         pipe='transform',
         in_=(config['sel_mosaic'], config['reg_inputs']),
@@ -269,32 +273,98 @@ def get_tlist(config):
             },
         follows=[t50, t44]
             )
-    t52 = dict(
-        name='create mosaic',
+    if 'mosaic_swarp_params' in config['jobconfig']:
+        t520_header_to_config = partial(
+                phot_mosaic.header_to_config,
+                **config['jobconfig']["mosaic_swarp_params"])
+    else:
+        t520_header_to_config = phot_mosaic.header_to_config
+    t520 = dict(
+        name='create mschdr',
         func='swarp',
         pipe='collate',
         in_=(t51, config['reg_grp']),
         add_inputs='{basename[0]}.fits',
         in_keys=[('dummy', 'in')],
-        out=[fmtname(config['fmt_mosaic_orig']),
-             fmtname(config['fmt_mosaic_wht'])],
+        out=fmtname(config['fmt_mosaic_hdr']),
+        out_keys='IMAGEOUT_NAME',
         params={
             'HEADER_SUFFIX': '.{}'.format(config['phot_hdr_suffix']),
             'PIXELSCALE_TYPE': 'MANUAL',
             'PIXEL_SCALE': 0.20,
+            'HEADER_ONLY': 'Y',
+                },
+        follows=[t50, t51],
+        after_func=t520_header_to_config,
+            )
+    t52 = dict(
+        name='create mosaic',
+        func='swarp',
+        pipe='collate',
+        in_=(t51, config['reg_grp']),
+        add_inputs=['{basename[0]}.fits', fmtname(config['fmt_mosaic_hdr'])],
+        # =fmtname(config['fmt_mosaic_hdr']),
+        in_keys=[('dummy', 'in', 'conf'), ],
+        out=[fmtname(config['fmt_mosaic']),
+             fmtname(config['fmt_mosaic_wht'])],
+        params={
+            'HEADER_SUFFIX': '.{}'.format(config['phot_hdr_suffix']),
+            # 'PIXELSCALE_TYPE': 'MANUAL',
+            # 'PIXEL_SCALE': 0.20,
             'DELETE_TMPFILES': 'Y',
             'FSCALE_DEFAULT': '0/0',
-            'BACK_SIZE': 64,
+            'BACK_SIZE': 768,
+            'COPY_KEYWORDS': ['OBJECT', 'MYCOLOR'],
+            'WRITE_FILEINFO': 'Y',
                 },
-        follows=t50,
+        follows=[t50, t51, t520],
+        after_func=phot_mosaic.apply_weight,
         jobs_limit=1,
+        auto_conf=True,
             )
-    t53 = dict(
-        name='apply whtmap',
-        func=phot_mosaic.apply_weight,
+    # t53 = dict(
+    #     name='apply whtmap',
+    #     func=phot_mosaic.apply_weight,
+    #     pipe='transform',
+    #     in_=(t52, config['reg_mosaic']),
+    #     out=fmtname(config['fmt_mosaic']),
+    #         )
+    t54 = dict(
+        name='get msccat',
+        func='sex',
         pipe='transform',
-        in_=(t52, config['reg_mosaic']),
-        out=fmtname(config['fmt_mosaic']),
+        in_=(t52, config['reg_mosaic_fits']),
+        # add_inputs='{basename[0]}.wht.fits',
+        in_keys=[['in', 'WEIGHT_IMAGE'], ],
+        out='{basename[0]}.cat',
+        params={'CATALOG_TYPE': 'ASCII_HEAD',
+                'DETECT_MINAREA': 3,
+                'DETECT_THRESH': 1.0,
+                'ANALYSIS_THRESH': 1.0,
+                'DEBLEND_MINCONT': 0.005,
+                'PHOT_APERTURES': [9, 13, 18, 22, 27, 36, 45, 54],
+                'BACK_SIZE': 64,
+                'WEIGHT_TYPE': 'MAP_WEIGHT',
+                # 'WEIGHT_TYPE': 'NONE',
+                'WEIGHT_GAIN': 'Y',
+                'GAIN_KEY': 'GAIN',
+                'MAG_ZEROPOINT': 25,
+                },
+        outparams=['MAG_APER(8)', 'MAGERR_APER(8)'],
+        after_func=phot_mosaic.sex_to_ascii,
+            )
+    t55 = dict(
+        name='match refcat2',
+        func=phot_mosaic.match_refcat,
+        pipe='transform',
+        in_=(t54, config['reg_mosaic']),
+        add_inputs=['{basename[0]}.fits', t15],
+        out=fmtname(config['fmt_msccat_matched']),
+        follows=[t10, t42],
+        kwargs={
+            'stilts_cmd': config['stilts_cmd'],
+            'reg_mosaic': config['reg_mosaic']
+            }
             )
 
     tlist = [
@@ -302,8 +372,8 @@ def get_tlist(config):
             t10, t15,   # refcat
             t20, t21, t22, t23, t24,          # comb
             t30, t31,       # sub
-            t40, t41, t42, t43, t44,      # phot
-            t50, t51, t52, t53
+            t40, t41, t42, t43, t44,      # phot calib
+            t50, t51, t520, t52, t54, t55       # mosaic
             ]
     return tlist
 

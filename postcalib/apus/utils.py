@@ -10,7 +10,6 @@ utils.py
 
 from __future__ import (absolute_import, division, print_function,
                         )
-from astropy.extern import six
 import re
 from functools import wraps    # enable pickling of decorator
 
@@ -35,10 +34,10 @@ def ensure_list(value, tuple_ok=False):
 
     if tuple_ok:
         listclass = (list, tuple)
-        elemclass = six.string_types + (dict, )
+        elemclass = (str, dict, )
     else:
         listclass = list
-        elemclass = six.string_types + (tuple, dict)
+        elemclass = (str, tuple, dict)
     if isinstance(value, elemclass) or callable(value):
         value = [value, ]
     elif value is None:
@@ -125,3 +124,30 @@ class Namespace(object):
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
+
+
+# # monkey patch the multiprocess Pool
+# import multiprocessing  # noqa: E402
+# # We must import this explicitly, it is not imported by the top-level
+# # multiprocessing module.
+# import multiprocessing.pool  # noqa: E402
+
+
+# class NoDaemonProcess(multiprocessing.Process):
+#     # make 'daemon' attribute always return False
+#     def _get_daemon(self):
+#         return False
+
+#     def _set_daemon(self, value):
+#         pass
+
+#     daemon = property(_get_daemon, _set_daemon)
+
+
+# # We sub-class multiprocessing.pool.Pool instead of multiprocessing.Pool
+# # because the latter is only a wrapper function, not a proper class.
+# class MyPool(multiprocessing.pool.Pool):
+#     Process = NoDaemonProcess
+
+
+# multiprocessing.Pool = MyPool

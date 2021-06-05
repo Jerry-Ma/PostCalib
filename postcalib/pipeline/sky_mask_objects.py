@@ -10,7 +10,7 @@ The script is called to mask out objects on a science exposure. The mask
 is typically obtained via running of SExtractor and set the CHECKIMAGE
 type to SEGMENTATION.
 
-The program takes an science exposre and its segmentation map, combines
+The program takes an science exposure and its segmentation map, combines
 them and creates an sky image with all the detected objects masked as
 NAN.
 
@@ -37,6 +37,7 @@ sky_image: fits image
 
 from __future__ import (absolute_import, division, print_function)
 import os
+import re
 import sys
 import glob
 import warnings
@@ -68,6 +69,23 @@ def main(*args, **kwargs):
         regions.extend(
                 glob.glob(
                     os.path.join(skymask_dir, '*{}*.reg'.format(obsid))))
+        # looks for additional mask stats with skymask_{key}.reg
+        _regions = glob.glob(os.path.join(skymask_dir, "skymask_*.reg"))
+        # print(regions)
+        # print(_regions)
+        add_regions = []
+        for reg in sorted(_regions, key=lambda x: len(x)):
+            regkey = re.match(
+                    "skymask_(.+)\.reg", os.path.basename(reg)).groups()[0]
+            if regkey in os.path.basename(image_file):
+                add_regions.append(reg)
+        if len(add_regions) > 1:
+            log('warning', "more than one skymask_*.reg found for {}, use"
+                "the last one {}".format(image_file, add_regions[-1]))
+        elif len(add_regions) == 1:
+            regions.append(add_regions[-1])
+        else:
+            pass
         log("use DS9 region masks\n{}".format('\n'.join(regions)))
 
         with fits.open(segment_file, memmap=True) as segment:
@@ -108,14 +126,14 @@ def apply_region_mask(hdu, regions, **kwargs):
     for region in regions:
         log("apply mask region {0}".format(region))
         # create a fresh wcs from keys
-        tmp_hdu = fits.ImageHDU(data=hdu.data)
-        # add basic wcs
-        for key in ['EQUINOX', 'CTYPE1', 'CTYPE2', 'CRPIX1', 'CRPIX2',
-                    'CRVAL1', 'CRVAL2', 'CUNIT1', 'CUNIT2', 'CD1_1', 'CD2_1',
-                    'CD1_2', 'CD2_2']:
-            tmp_hdu.header[key] = hdu.header[key]
+        # tmp_hdu = fits.ImageHDU(data=hdu.data)
+        # # add basic wcs
+        # for key in ['EQUINOX', 'CTYPE1', 'CTYPE2', 'CRPIX1', 'CRPIX2',
+        #             'CRVAL1', 'CRVAL2', 'CUNIT1', 'CUNIT2', 'CD1_1', 'CD2_1',
+        #             'CD1_2', 'CD2_2']:
+        #     tmp_hdu.header[key] = hdu.header[key]
         try:
-            mask = pyregion.open(region).get_mask(hdu=tmp_hdu)
+            mask = pyregion.open(region).get_mask(hdu=hdu)
             hdu.data[mask] = np.nan
         except ValueError:
             log("unable to apply region mask {},"

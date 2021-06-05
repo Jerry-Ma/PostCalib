@@ -73,7 +73,7 @@ import sys
 import glob
 from astropy.table import Table
 # from postcalib.wiyn import get_layout
-from postcalib.apus.common import get_log_func
+from postcalib.apus.common import get_log_func, touch_file
 # from postcalib import qa
 
 
@@ -97,29 +97,50 @@ def main(*args, **kwargs):
     #   otherwise purge {prefix}_*_{obsid}_*
     #   add if >= 0
 
-    # if not os.path.exists(checkfile):
-    #     checker_table = []
-    # else:
-    #     checker_table = Table.read(
-    #             checkfile, format='ascii.commented_header')
+    if not os.path.exists(checkfile):
+        checker_table = []
+    else:
+        checker_table = Table.read(
+                checkfile, format='ascii.commented_header')
 
     purge_glob = os.path.join(jobdir, grpkey + "[0-9]*_{obsid}_*")
     # glob the images
     add_count = skip_count = rm_count = 0
     images = glob.glob(os.path.join(jobdir, kwargs['sel_inputs']))
     # process the images to merge with fallbacks
-    if len(images) == 0:
-        log("no images available for selection, try using fallbacks")
-        if 'fallbacks' in kwargs:
-            for fkey, fallback in kwargs['fallbacks']:
-                fb_images = glob.glob(os.path.join(jobdir, fallback))
-                if len(fb_images) == 0:
-                    continue
-                else:
-                    log("fallback to {}".format(fkey))
-                    images = fb_images
-                    break
-    for inname in images:
+    fb_images = []
+    for entry in job_table:
+        image = get_image(images, entry['OBSID'])
+        if image is None:
+            log("no images available for {}".format(entry['OBSID']))
+            if 'fallbacks' in kwargs:
+                for fkey, fallback in kwargs['fallbacks']:
+                    fb_image = get_image(
+                            glob.glob(os.path.join(jobdir, fallback)),
+                            entry['OBSID'])
+                    if fb_image is None:
+                        continue
+                    else:
+                        log("fallback to {}".format(fb_image))
+                        fb_images.append(fb_image)
+                        break
+        else:
+            pass
+    # if len(images) == 0:
+    #     log("no images available for selection, try using fallbacks")
+    #     if 'fallbacks' in kwargs:
+    #         for fkey, fallback in kwargs['fallbacks']:
+    #             fb_images = glob.glob(os.path.join(jobdir, fallback))
+    #             if len(fb_images) == 0:
+    #                 continue
+    #             else:
+    #                 log("fallback to {}".format(fkey))
+    #                 images = fb_images
+    #                 break
+    rm_grp = set()
+    add_grp = set()
+    skipped_grp = {}
+    for inname in images + fb_images:
         # parse image name
         parsed_filename = re.match(
                 kwargs['reg_inputs'], os.path.basename(inname)
@@ -136,28 +157,46 @@ def main(*args, **kwargs):
             bf = os.path.basename(f)
             if entry[grpcol] >= 0 and os.path.exists(outname) and \
                     bf.startswith(ppflag):
+                if entry[grpcol] not in skipped_grp.keys():
+                    skipped_grp[entry[grpcol]] = inname
                 log("existing file {} for link {}".format(f, outname))
                 if skip_count_flag:
                     skip_count += 1
                     skip_count_flag = False
                 continue
             else:
+                # query the checkfile for the old grpid
+                old_entry = [e for e in checker_table
+                             if e['OBSID'] == parsed_filename['obsid']]
+                if not old_entry:
+                    log("warning", "something wrong with the checker file")
+                rm_grp.add(old_entry[0][grpcol])
                 log("purge obsolete file {}".format(f))
                 os.remove(f)
                 if rm_count_flag:
                     rm_count += 1
                     rm_count_flag = False
-        # also purge
-        for f in glob.glob(os.path.join(
-                jobdir, grpkey + "_{obsid}_*".format(**parsed_filename))):
-            log("purge obsolete file {}".format(f))
-            os.remove(f)
+                # also purge no id product
+                for f in glob.glob(os.path.join(
+                        jobdir, grpkey + "_{obsid}_*".format(
+                            **parsed_filename))):
+                    log("purge obsolete file {}".format(f))
+                    os.remove(f)
         # create link of >= 0
         # print(inname, outname)
         if not os.path.exists(outname) and entry[grpcol] >= 0:
+            add_grp.add(entry[grpcol])
             log("link for {} to {}".format(grpkey, outname))
             os.symlink(os.path.basename(inname), outname)
             add_count += 1
+    # for grp that has rm but no add, touch one file to trigger update
+    touch_grp = rm_grp - add_grp
+    print(rm_grp, add_grp, touch_grp)
+    for grpid in touch_grp:
+        if grpid in skipped_grp.keys():
+            touch_file(skipped_grp[grpid])
+            log("touch group {} of {} for triggering update".format(
+                grpid, skipped_grp[grpid]))
 
     log("{} entries + {}, - {}, skipped {}".format(
         grpkey, add_count, rm_count, skip_count))
@@ -174,3 +213,11 @@ def get_entry(tbl, **kwargs):
             return entry[0]
         else:
             return None
+
+
+def get_image(images, obsid):
+    image = [i for i in images if obsid in os.path.basename(i)]
+    if len(image) > 0:
+        return image[0]
+    else:
+        return None

@@ -108,10 +108,10 @@ def main(*args, **kwargs):
         layout = get_layout(hdulist)
         otas = get_mask_otas(str(entry['mask_otas']), layout)
         log("mask otas {} for {}".format(otas, logid))
-        hdulist = apply_mask(hdulist, layout, otas)
+        hdulist = apply_mask(hdulist, layout, otas, bpmdir=kwargs['bpmdir'])
         log("write masked sci extentions {}".format(outname))
         hdulist[:layout.n_ota + 1].writeto(outname, overwrite=True)
-        out_assoc = outname.rstrip(".fits") + ".assoc"
+        out_assoc = outname.rsplit(".fits", 1)[0] + ".assoc"
         log("write associate extentions {}".format(out_assoc))
         fits.HDUList(hdulist[:1] + hdulist[layout.n_ota + 1:]).writeto(
                 out_assoc, overwrite=True)
@@ -141,7 +141,7 @@ def select_images(jobfile, jobdir, checkfile, **kwargs):
                 checkfile, format='ascii.commented_header')
 
     def rm_entry(outname, outglob):
-        if os.path.exists(outname):
+        if os.path.islink(outname):
             log("unlink {}".format(outname))
             os.unlink(outname)
             success = True
@@ -194,6 +194,8 @@ def select_images(jobfile, jobdir, checkfile, **kwargs):
                 touch_file(outname)
                 touch_count += 1
             else:
+                if os.path.islink(outname):
+                    os.unlink(outname)
                 log("link {} -> {}".format(linksrc, outname))
                 os.symlink(linksrc, outname)
                 add_count += 1
@@ -218,13 +220,13 @@ def select_images(jobfile, jobdir, checkfile, **kwargs):
     job_table.write(checkfile, format='ascii.commented_header')
 
 
-def apply_mask(hdulist, layout, mask_otas):
+def apply_mask(hdulist, layout, mask_otas, bpmdir=None):
     # look for badpixel mask in bmp dir aside this script
-    bpmdir = os.path.join(os.path.dirname(__file__), 'bpm')
+    _bpmdir = os.path.join(os.path.dirname(__file__), 'bpm')
     if layout.instru == '5odi':
-        bpmdir = os.path.join(bpmdir, 'odi_5x6')
+        _bpmdir = os.path.join(_bpmdir, 'odi_5x6')
     elif layout.instru == 'podi':
-        bpmdir = os.path.join(bpmdir, 'podi')
+        _bpmdir = os.path.join(_bpmdir, 'podi')
     else:
         raise ValueError('ODI instru {0} not recognized'
                          .format(layout.instru))
@@ -234,24 +236,32 @@ def apply_mask(hdulist, layout, mask_otas):
         if otaxy in mask_otas:
             hdu.data[:, :] = np.nan
             continue
-        bpm_file = os.path.join(bpmdir, 'bpm_xy{0}.reg'.format(otaxy))
+        bpm_files = [os.path.join(_bpmdir, 'bpm_xy{0}.reg'.format(otaxy)), ]
+        if bpmdir is not None:
+            bpm_files.extend(glob.glob(
+                os.path.join(bpmdir, 'bpm_xy{}.reg'.format(otaxy))))
         bpm = []
-        with open(bpm_file, 'r') as fo:
-            for ln in fo.readlines():
-                rect = re.match(r'box\(([0-9+-., ]+)\)', ln.strip())
-                if rect is not None:
-                    rect = list(map(float, rect.group(1).split(',')))
-                    # print "box from bpm: {0}".format(rect)
-                    bpm.append((
-                        max([rect[0] - rect[2] * 0.5, 0]),
-                        rect[0] + rect[2] * 0.5,
-                        max([rect[1] - rect[3] * 0.5, 0]),
-                        rect[1] + rect[3] * 0.5))
-                else:
-                    continue
+        for bpm_file in bpm_files:
+            # print(bpm_file)
+            with open(bpm_file, 'r') as fo:
+                for ln in fo.readlines():
+                    rect = re.match(r'box\(([0-9+-., ]+)\)', ln.strip())
+                    if rect is not None:
+                        rect = list(map(float, rect.group(1).split(',')))
+                        # print "box from bpm: {0}".format(rect)
+                        bpm.append((
+                            max([rect[0] - rect[2] * 0.5, 0]),
+                            rect[0] + rect[2] * 0.5,
+                            max([rect[1] - rect[3] * 0.5, 0]),
+                            rect[1] + rect[3] * 0.5))
+                    else:
+                        if ln.startswith("box"):
+                            raise Exception("should not happen")
+                        continue
         data = hdu.data[:, :]
         for box in bpm:
-            l, r, b, t = [int(v + 0.5) for v in box]
+            l, r, b, t = (int(box[0]), int(box[1]) + 1,
+                          int(box[2]), int(box[3]) + 1)
             data[b:t, l:r] = np.nan
         hdulist[ext].data = data
     return hdulist

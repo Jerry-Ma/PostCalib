@@ -46,6 +46,7 @@ import os
 import re
 import sys
 # import glob
+import itertools
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
 import subprocess
@@ -90,6 +91,8 @@ def main(*args, **kwargs):
     with open(out_reg, 'w') as fo:
         fo.write(ds9reg)
 
+    stilts_in = []
+    cats_in = []
     # query sdss and get reference catalog
     sdss_cat = query_sdss(
             filter=sdss_filter,
@@ -97,9 +100,13 @@ def main(*args, **kwargs):
             min_dec=s, max_dec=n,
             **kwargs
             )
-    out_sdss = os.path.join(outdir, outbase.replace("refcat", 'sdss'))
-    log("save to SDSS catalog {}".format(out_sdss))
-    sdss_cat.write(out_sdss, format='ascii.commented_header')
+    if sdss_cat is not None and len(sdss_cat) > 0:
+        out_sdss = os.path.join(outdir, outbase.replace("refcat", 'sdss'))
+        log("save to SDSS catalog {}".format(out_sdss))
+        sdss_cat.write(out_sdss, format='ascii.commented_header')
+        stilts_in.append(
+            "ifmt%N%=ascii in%N%={out_sdss} values%N%=ra~dec suffix%N%=_sdss ")
+        cats_in.append((sdss_cat, '_sdss'))
 
     # query gaia
     gaia_cat = query_gaia(
@@ -107,23 +114,57 @@ def main(*args, **kwargs):
             min_dec=s, max_dec=n,
             **kwargs
             )
-    out_gaia = os.path.join(outdir, outbase.replace("refcat", 'gaia'))
-    log("save to Gaia catalog {}".format(out_gaia))
-    gaia_cat.write(out_gaia, format='ascii.commented_header')
+    if gaia_cat is not None and len(gaia_cat) > 0:
+        out_gaia = os.path.join(outdir, outbase.replace("refcat", 'gaia'))
+        log("save to Gaia catalog {}".format(out_gaia))
+        gaia_cat.write(out_gaia, format='ascii.commented_header')
+        stilts_in.append(
+            "ifmt%N%=ascii in%N%={out_gaia} values%N%=ra~dec suffix%N%=_gaia ")
+        cats_in.append((gaia_cat, '_gaia'))
 
-    # query Pan-STARRS
-    # TODO
+    # query Pan-STARRS DR1
+    out_ps1 = os.path.join(outdir, outbase.replace("refcat", 'ps1'))
+    ps1_cat = query_panstarrs(
+            min_ra=w, max_ra=e,
+            min_dec=s, max_dec=n,
+            out_file=out_ps1,
+            cra=cra, cdec=cdec,
+            width=width, height=height,
+            **kwargs
+            )
+    if ps1_cat is not None and len(ps1_cat) > 0:
+        log("save to PS1 catalog {}".format(out_ps1))
+        ps1_cat.write(out_ps1, format='ascii.commented_header')
+        stilts_in.append(
+            "ifmt%N%=ascii in%N%={out_ps1} values%N%=ra~dec suffix%N%=_ps1 ")
+        cats_in.append((ps1_cat, '_ps1'))
 
-    # merge the three catalogs
-    stilts_merge = (
-            "{stilts_cmd} tmatchn nin=2 "
-            "ifmt1=ascii in1={out_sdss} values1=ra~dec suffix1=_sdss "
-            "ifmt2=ascii in2={out_gaia} values2=ra~dec suffix2=_gaia "
-            "out={out_file} ofmt=ascii multimode=group matcher=sky params=1 "
-            "join1=always join2=always fixcols=all").format(
-                stilts_cmd=kwargs['stilts_cmd'], **locals())
-    subprocess.check_call(
-            stilts_merge.replace(" ", '%').replace('~', " ").split("%"))
+    nin = len(stilts_in)
+    if nin == 0:
+        raise RuntimeError("no reference catalog can be found")
+    elif nin == 1:
+        # add suffix to the catalog columns and save
+        out_cat, suffix = cats_in[0]
+        for col in out_cat.colnames:
+            out_cat.rename_column(col, col + suffix)
+        out_cat.write(out_file, format='ascii.commented_header',
+                      overwrite=True)
+    else:
+        # merge the catalogs
+        stilts_merge = (
+                "{stilts_cmd} tmatchn nin={nin} "
+                "out={out_file} ofmt=ascii multimode=group "
+                "matcher=sky params=1 fixcols=all " +
+                ' '.join(
+                    in_.replace("%N%", str(i + 1))
+                    for i, in_ in enumerate(stilts_in)) + ' '
+                ' '.join(
+                    'join{}=always'.format(i + 1) for i in range(nin))
+                ).format(
+                    stilts_cmd=kwargs['stilts_cmd'], **locals())
+
+        subprocess.check_call(
+            re.split(r'%+', stilts_merge.replace(" ", '%').replace('~', " ")))
     refcat = Table.read(out_file, format='ascii.commented_header')
     log("save to refcat {}".format(out_file))
     log("{} stars in total".format(len(refcat)))
@@ -147,13 +188,25 @@ def stack_cats(in_cats, out_cat, **kwargs):
     tbls = [Table.read(f, format='ascii.commented_header') for f in in_cats]
     tbl = vstack(tbls, join_type='exact')
     # use ra_sdss as key
-    tbl_w_key = tbl[~tbl['ra_sdss'].mask]
-    tbl_wo_key = tbl[tbl['ra_sdss'].mask]
+    # tbl_w_key = tbl[~tbl['ra_sdss'].mask]
+    # tbl_wo_key = tbl[tbl['ra_sdss'].mask]
     # run unique separately
-    tbl = vstack([
-        unique(tbl_w_key, keys='ra_sdss'),
-        unique(tbl_wo_key, keys='ra_gaia'),
-                ], join_type='exact')
+    tbls = []
+    keys = ['ra_sdss', 'ra_gaia', 'ra_ps1']
+
+    def get_tbl(tbl, ikey):
+        key = keys[ikey]
+        tbl_w_key = tbl[~tbl[key].mask]
+        tbl_wo_key = tbl[tbl[key].mask]
+        tbls.append(unique(tbl_w_key, keys=key))
+        if ikey == len(keys) - 1:
+            pass
+            # tbls.append(unique(tbl_wo_key, keys=key))
+        else:
+            get_tbl(tbl_wo_key, ikey + 1)
+
+    get_tbl(tbl, 0)
+    tbl = vstack(tbls, join_type='exact')
     log = get_log_func(default_level='debug', **kwargs)
     log("save to master refcat {}".format(out_cat))
     log("{} stars in total".format(len(tbl)))
@@ -193,9 +246,144 @@ def query_gaia(**kwargs):
         "AND dec BETWEEN {min_dec:f} and {max_dec:f}", ]
     sql_query = '\n'.join(sql_query).format(**kwargs)
     log("query Gaia with sql string\n{}".format(sql_query))
-    job = Gaia.launch_job_async(sql_query)
-    cat = job.get_results()
-    log("{} stars found in Gaia".format(len(cat)))
+    try:
+        job = Gaia.launch_job_async(sql_query)
+        cat = job.get_results()
+        log("{} stars found in Gaia".format(len(cat)))
+        return cat
+    except Exception as e:
+        log("unable to query gaia catalog")
+        return None
+
+
+def query_panstarrs(**kwargs):
+    log = get_log_func(default_level='debug', **kwargs)
+    url = 'http://archive.stsci.edu/panstarrs/search.php'
+    querycols = ('objName,objiD,'
+                 'raMean,decMean,raMeanErr,decMeanErr,'
+                 'nDetections,objInfoFlag,qualityFlag,'
+                 'ng,nr,ni,nz,ny,'
+                 'gMeanPSFMag,gMeanPSFMagErr,gFlags,'
+                 'rMeanPSFMag,rMeanPSFMagErr,rFlags,'
+                 'iMeanPSFMag,iMeanPSFMagErr,iFlags,'
+                 'zMeanPSFMag,zMeanPSFMagErr,zFlags,'
+                 'yMeanPSFMag,yMeanPSFMagErr,yFlags')
+    payload = {
+            'outputformat': 'VOTable',
+            'equinox': 'J2000',
+            'nDetections': '>4',
+            'selectedColumnsCsv': querycols.lower(),
+            'max_records': 50001,
+            'max_rpp': 500,
+            'action': 'Search',
+            'skipformat': 'on',
+            }
+    # check the target size to compute request params
+    ps1_size = 30. * 2 ** 0.5  # arcmin
+    target_width = kwargs['width'] * 60
+    target_height = kwargs['height'] * 60
+
+    # get the query radius and number pointings
+    def get_pts(width, min_, max_):
+        n_pts = 1
+        while True:
+            w = width / n_pts
+            if w <= ps1_size:
+                borders = np.linspace(min_, max_, n_pts + 1)
+                return (borders[:-1] + borders[1:]) * 0.5, w / 2. ** 0.5
+            else:
+                n_pts += 1
+
+    ra_centers, ra_rad = get_pts(
+            target_width, kwargs['min_ra'], kwargs['max_ra'])
+    dec_centers, dec_rad = get_pts(
+            target_height, kwargs['min_dec'], kwargs['max_dec'])
+    # print(ra_centers, ra_rad, dec_centers, dec_rad)
+    if ra_rad > dec_rad:
+        query_rad = ra_rad
+        query_size = query_rad * 2 ** 0.5
+        dec_n_pts = int(((0.999 * target_height) // query_size) + 1)
+        dec_pts_off = (
+                dec_n_pts * query_size - target_height) * 0.5 / 60.
+        dec_borders = np.linspace(
+                kwargs['min_dec'] - dec_pts_off,
+                kwargs['min_dec'] - dec_pts_off + dec_n_pts * query_size / 60.,
+                dec_n_pts + 1)
+        dec_centers = (dec_borders[:-1] + dec_borders[1:]) * 0.5
+    else:
+        query_rad = dec_rad
+        cosdec = np.cos(np.deg2rad(kwargs['cdec']))
+        query_size = query_rad * 2 ** 0.5
+        ra_n_pts = int(((0.999 * target_width) // query_size) + 1)
+        ra_pts_off = (
+                ra_n_pts * query_size - target_height) * 0.5 / 60.
+        ra_borders = np.linspace(
+                kwargs['min_ra'] - ra_pts_off / cosdec,
+                kwargs['min_ra'] -
+                (ra_pts_off + ra_n_pts * query_size / 60.) / cosdec,
+                ra_n_pts + 1)
+        ra_centers = (ra_borders[:-1] + ra_borders[1:]) * 0.5
+        ra_n_pts = int(((0.999 * target_width) // query_rad) + 1)
+        ra_pts_off = (
+                ra_n_pts * query_rad * 2 ** 0.5 - target_width) * 0.5 / 60.
+        ra_borders = np.linspace(
+                kwargs['min_ra'] - ra_pts_off,
+                kwargs['max_ra'] + ra_pts_off, ra_n_pts)
+        ra_centers = (ra_borders[:-1] + ra_borders[1:]) * 0.5
+    # print(ra_centers, dec_centers, query_rad)
+    # import pdb
+    # pdb.set_trace()
+    # do the request
+    import requests
+    from astropy.table import Table
+
+    cats = []
+    for i, (cra, cdec) in enumerate(
+            itertools.product(ra_centers, dec_centers)):
+        _payload = dict(payload, ra=cra, dec=cdec, radius=query_rad)
+        # from astropy.table import Column
+        log("query PAN-STARRS DR1 chunk {} with payload\n{}".format(
+            i, _payload))
+        response = requests.get(url=url, params=_payload)
+        if response.status_code == requests.codes.ok:
+            out_file = kwargs['out_file'] + 'chunk{}'.format(i)
+            with open(out_file, 'w') as fo:
+                fo.write(response.text)
+            # import pdb
+            # pdb.set_trace()
+            # filter the catalog
+            cat = Table.read(out_file, format='votable')
+            log("{} PS1 sources before filtering".format(len(cat)))
+            # good source flags
+            goodflag = 0x00000004 | 0x00000010 | 0x00000020
+            # cat['qualityFlag'].fill_value = 0xFFFFFFFF
+            # qualityflag = cat['qualityFlag'].astype(int)
+            qualityflag = cat['qualityflag']
+            cat = cat[((qualityflag & goodflag) == goodflag) &
+                      (cat['ramean'] >= kwargs['min_ra']) &
+                      (cat['ramean'] <= kwargs['max_ra']) &
+                      (cat['decmean'] >= kwargs['min_dec']) &
+                      (cat['decmean'] <= kwargs['max_dec'])
+                      ]
+            log("{} PS1 sources after filtering".format(len(cat)))
+            cats.append(cat)
+    if len(cats) == 0:
+        log("unable to found PS1 sources")
+        return None
+    cat = unique(vstack(cats, join_type='exact'), keys='objid')
+    outcols = [
+            None, None, 'ra', 'dec', 'raErr', 'decErr',
+            None, None, None,
+            None, None, None, None, None,
+            'g', 'err_g', 'flag_g',
+            'r', 'err_r', 'flag_r',
+            'i', 'err_i', 'flag_i',
+            'z', 'err_z', 'flag_z',
+            'y', 'err_y', 'flag_y',
+            ]
+    for outcol, col in zip(outcols, querycols.split(',')):
+        if outcol is not None:
+            cat.rename_column(col.lower(), outcol)
     return cat
 
 

@@ -110,8 +110,8 @@ def main(*args, **kwargs):
         log("processing catalog {}".format(catfile))
         airmass = subbulk[ck['airmass']][0]
         # figure out hdrfile name from catfile through indexing
-        hdrfile = look_up_images(image_files, catfile).rstrip('.fits') + \
-            '.' + hdr_suffix
+        hdrfile = look_up_images(image_files, catfile).rsplit(
+                '.fits', 1)[0] + '.' + hdr_suffix
         log("processing swarp header {0}".format(hdrfile))
         valid_s = []
         headers = []
@@ -146,7 +146,7 @@ def main(*args, **kwargs):
                 else:
                     fo.write(hdr)
     # create QA plots
-    qa_master(master, ck, master_file.rstrip(".cat") + ".png", kwargs)
+    qa_master(master, ck, master_file.rsplit(".cat", 1)[0] + ".png", kwargs)
 
     log("master calib file saved: {0}".format(master_file))
     master.write(master_file, format='ascii.commented_header')
@@ -167,11 +167,34 @@ def match_refcat(*args, **kwargs):
             ).groupdict()
     # print(parsed_filename)
     band = parsed_filename['band']
-    log("use sdss band {}".format(band))
+    log("use band {}".format(band))
+    if band == 'u':
+        log('no ps1 data for u band')
+        refkey = 'sdss'
+    else:
+        # figure out coverage from recat
+        refcat = Table.read(ref_file, format='ascii.commented_header')
+        samp_lim = (17, 18)
+        samp_counts = {}
+        for key in ['sdss', 'ps1']:
+            samp_counts[key] = len(
+                refcat[
+                    (refcat['{}_{}'.format(band, key)] > samp_lim[0]) &
+                    (refcat['{}_{}'.format(band, key)] < samp_lim[1])
+                    ])
+        if samp_counts['sdss'] > 1.1 * samp_counts['ps1']:
+            log("use sdss ({sdss}) over ps1 ({ps1})".format(**samp_counts))
+            refkey = 'sdss'
+        elif samp_counts['ps1'] > 1.1 * samp_counts['sdss']:
+            log("use ps1 ({ps1}) over sdss ({sdss})".format(**samp_counts))
+            refkey = 'ps1'
+        else:
+            log("use preferred sdss ({sdss})".format(**samp_counts))
+            refkey = 'sdss'
 
-    icmd1 = 'select "{band}_sdss < 90. && {band}_sdss > 0' \
-            ' && err_{band}_sdss <= 0.10857"' \
-        .format(band=band)
+    icmd1 = 'select "{band}_{refkey} < 90. && {band}_{refkey} > 0' \
+            ' && err_{band}_{refkey} <= 0.10857"' \
+        .format(band=band, refkey=refkey)
     icmd2 = 'select "MAG_AUTO < 90. && MAGERR_AUTO >= 0.001 && FLAGS == 0"'
     stilts_match = """{stilts_cmd}
                    tmatch2
@@ -182,7 +205,7 @@ def match_refcat(*args, **kwargs):
                    in2={cat_file}
                    ifmt2=ascii
                    icmd2={icmd2}
-                   values1=ra_sdss dec_sdss
+                   values1=ra_{refkey} dec_{refkey}
                    values2=ALPHA_J2000 DELTA_J2000
                    params=1.2
                    join=1and2
@@ -193,21 +216,25 @@ def match_refcat(*args, **kwargs):
 
     tbl = Table.read(out_file, format='ascii.commented_header')
     # get ready for self-calibration
-    log("{} stars in total".format(len(tbl)))
+    log("{} {} stars in total".format(len(tbl), refkey))
 
-    renamecol = [
-            ('ra_sdss', 'SDSS_RA'), ('dec_sdss', 'SDSS_DEC'),
-            ('u_sdss', 'SDSS_MAG_U'), ('err_u_sdss', 'SDSS_ERR_U'),
-            ('g_sdss', 'SDSS_MAG_G'), ('err_g_sdss', 'SDSS_ERR_G'),
-            ('r_sdss', 'SDSS_MAG_R'), ('err_r_sdss', 'SDSS_ERR_R'),
-            ('i_sdss', 'SDSS_MAG_I'), ('err_i_sdss', 'SDSS_ERR_I'),
-            ('z_sdss', 'SDSS_MAG_Z'), ('err_z_sdss', 'SDSS_ERR_Z'),
+    copycol = [
+            ('ra_{refkey}', 'REF_RA'), ('dec_{refkey}', 'REF_DEC'),
+            ('u_{refkey}', 'REF_MAG_U'), ('err_u_{refkey}', 'REF_ERR_U'),
+            ('g_{refkey}', 'REF_MAG_G'), ('err_g_{refkey}', 'REF_ERR_G'),
+            ('r_{refkey}', 'REF_MAG_R'), ('err_r_{refkey}', 'REF_ERR_R'),
+            ('i_{refkey}', 'REF_MAG_I'), ('err_i_{refkey}', 'REF_ERR_I'),
+            ('z_{refkey}', 'REF_MAG_Z'), ('err_z_{refkey}', 'REF_ERR_Z'),
             ('ALPHA_J2000', 'ODI_RA'), ('DELTA_J2000', 'ODI_DEC'),
             ('MAG_AUTO', 'ODI_MAG_AUTO'), ('MAGERR_AUTO', 'ODI_ERR_AUTO'),
             ('XWIN_IMAGE', 'ODI_X'), ('YWIN_IMAGE', 'ODI_Y'),
             ]
-    for oc, nc in renamecol:
-        tbl.rename_column(oc, nc)
+    for oc, nc in copycol:
+        oc = oc.format(refkey=refkey)
+        if oc in tbl.colnames:
+            tbl[nc] = tbl[oc]
+        else:
+            log('warning', 'column {} does not exist for refcat'.format(oc))
     # get layout
     with fits.open(image_file, memmap=True) as hdulist:
         layout = get_layout(hdulist)
@@ -367,14 +394,14 @@ def get_bpmask(xs, ys, exts, pad, layout):
 def get_context(photgrp, band, layout):
     cband = {'u': ('u', 'g'),
              'g': ('g', 'r'),
-             'r': ('r', 'i'),
+             'r': ('g', 'r'),
              'i': ('r', 'i'),
              'z': ('i', 'z'),
              }
     ck = {
-        'smag': 'SDSS_MAG_{0}'.format(band.upper()),
-        'semag': 'SDSS_ERR_{0}'.format(band.upper()),
-        'smaglims': dict(z=(0, 19), u=(0, 19), i=(0, 20)).get(band, (0, 21)),
+        'smag': 'REF_MAG_{0}'.format(band.upper()),
+        'semag': 'REF_ERR_{0}'.format(band.upper()),
+        'smaglims': dict(z=(0, 19), u=(0, 19), i=(0, 20)).get(band, (0, 20)),
         'mag': 'ODI_MAG_AUTO',
         'emag': 'ODI_ERR_AUTO',
         # 'mag': 'MAG_APER_3',
@@ -384,8 +411,8 @@ def get_context(photgrp, band, layout):
         'instru': layout.instru,
         'band': band,
         'cband': cband[band],
-        'cmag1': 'SDSS_MAG_{0}'.format(cband[band][0].upper()),
-        'cmag2': 'SDSS_MAG_{0}'.format(cband[band][1].upper()),
+        'cmag1': 'REF_MAG_{0}'.format(cband[band][0].upper()),
+        'cmag2': 'REF_MAG_{0}'.format(cband[band][1].upper()),
         'clip0': 5.0,
         'clipsc': 3.0,
         'airmass': 'AIRMASS',
@@ -483,7 +510,7 @@ def get_master_calib(tablelist, ck, kwargs):
         #             col_kins, col_kair, col_bota, col_bair, col_bcat]:
         #     tbl.add_column(col)
         master.append(tbl)
-    master = vstack(master, join_type='exact')
+    master = vstack(master, join_type='outer')
     return master
 
 
@@ -540,7 +567,7 @@ def self_calibrate(bulk, ck, model_flags=('color', 'ota', 'cat', 'airmass')):
 
 def look_up_images(images, cat):
     for image in images:
-        if os.path.basename(image).rstrip('.fits') in cat:
+        if os.path.basename(image).rsplit('.fits', 1)[0] in cat:
             return image
     else:
         raise RuntimeError("unable to find image for {}".format(cat))
@@ -555,8 +582,8 @@ def qa_master(master, ck, savename, kwargs):
     fig = plt.figure(figsize=(18, 10))
     ax = fig.add_subplot(1, 1, 1)
 
-    ax.set_xlabel(r'SDSS {0} - {1} (mag)'.format(*cband))
-    ax.set_ylabel(r'$m_{SDSS} - m_{ins} - k_{ins} \times (%s - %s) '
+    ax.set_xlabel(r'REF {0} - {1} (mag)'.format(*cband))
+    ax.set_ylabel(r'$m_{REF} - m_{ins} - k_{ins} \times (%s - %s) '
                   r'- b_{OTA} - b_{X}X - b_{cat}$ (mag)' % cband)
 
     plot_zp_color(ax, master, ck, kwargs)

@@ -146,7 +146,7 @@ def de_fringe(data, fringe, fringemask, ota, log):
              fringe[hi_samp[0], hi_samp[1]] - fringe[lo_samp[0], lo_samp[1]])
     # sigmaclip
     scale = scale[(~np.isnan(scale)) & (~np.isinf(scale))]
-    mean, med, stdev = sigma_clipped_stats(scale, sigma=2, iters=10)
+    mean, med, stdev = sigma_clipped_stats(scale, sigma=2, maxiters=10)
 
     # import matplotlib.pyplot as plt
     # plt.hist(scale, np.linspace(

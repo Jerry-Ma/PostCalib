@@ -33,12 +33,13 @@ import sys
 
 import numpy as np
 from astropy.io import fits
-from functools import partial
+# from functools import partial
 import itertools
 
-from multiprocessing import cpu_count, Pool
+# from multiprocessing import cpu_count, Pool
 
 from scipy.ndimage import uniform_filter  # , gaussian_filter, median_filter
+# from scipy.stats import sigmaclip
 import pyregion
 from scipy import interpolate
 
@@ -69,15 +70,22 @@ def main(*args, **kwargs):
 
     otas = layout.ota_order
 
-    memory_limit = 4  # G
-    _cpu_count = int(memory_limit / (len(images) * 0.1))
-    _cpu_count = min(cpu_count(), _cpu_count)
-    log("using {} CPUs".format(_cpu_count))
-    pool = Pool(_cpu_count)
-    data_dict = dict(pool.map_async(
-            partial(mp_worker,
-                    images=images, layout=layout, kwargs=kwargs),
-            otas).get(9999999))
+    # memory_limit = 4  # G
+    # _cpu_count = int(memory_limit / (len(images) * 0.1))
+    # _cpu_count = min(cpu_count(), _cpu_count)
+    # if _cpu_count == 0:
+    #     _cpu_count = 1
+    # log("using {} CPUs".format(_cpu_count))
+    # pool = Pool(_cpu_count)
+    # data_dict = dict(pool.map_async(
+    #         partial(mp_worker,
+    #                 images=images, layout=layout, kwargs=kwargs),
+    #         otas).get(9999999))
+    data_dict = []
+    for ota in otas:
+        data_dict.append(mp_worker(
+            ota, images=images, layout=layout, kwargs=kwargs))
+    data_dict = dict(data_dict)
     for ota in otas:
         ext = layout.get_ota_ext(ota)
         log("write to ext {} OTA {}".format(ext, ota))
@@ -98,12 +106,18 @@ def smooth(*args, **kwargs):
     layout = get_layout(hdulist)
     otas = layout.ota_order
 
-    pool = Pool(cpu_count())
-    data_dict = dict(pool.map_async(
-            partial(smooth_tile,
-                    image=in_file, layout=layout,
-                    width=8, kwargs=kwargs),
-            otas).get(9999999))
+    # pool = Pool(cpu_count())
+    # data_dict = dict(pool.map_async(
+    #         partial(smooth_tile,
+    #                 image=in_file, layout=layout,
+    #                 width=8, kwargs=kwargs),
+    #         otas).get(9999999))
+    data_dict = []
+    for ota in otas:
+        data_dict.append(smooth_tile(
+            ota, image=in_file, layout=layout, width=8, kwargs=kwargs))
+    data_dict = dict(data_dict)
+
     for ota in otas:
         ext = layout.get_ota_ext(ota)
         log("write to ext {} OTA {}".format(ext, ota))
@@ -234,7 +248,12 @@ def fix_data(data, wl, log):
     samp_i.append(2 * samp_i[-1] - samp_i[-2] + 50)
     samp_j.insert(0, 2 * samp_j[0] - samp_j[1] - 50)
     samp_j.append(2 * samp_j[-1] - samp_j[-2] + 50)
-    padval = np.nanmedian(samp_v)
+    # sigma clip the samp_v for the padding value
+    # _samp_v, _, _ = sigmaclip(samp_v[~np.isnan(samp_v)], 2, 2)
+    _samp_v = samp_v
+    padval = np.nanmedian(_samp_v)
+    if np.isnan(padval):
+        log("warning", "not able to get an estimate of the padval")
     samp_v[np.isnan(samp_v)] = padval
     _samp_v = np.ones((samp_v.shape[0] + 2, samp_v.shape[1] + 2)) * padval
     _samp_v[1:-1, 1:-1] = samp_v
