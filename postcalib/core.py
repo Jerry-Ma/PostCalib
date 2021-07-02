@@ -392,6 +392,7 @@ def init_job(config_file, jobkey, images,
                 continue
             parsed_filename = parsed_filename.groupdict()
             linkname = config['fmt_orig'].format(**parsed_filename)
+            linkname = linkname.replace('*', 'x')
             link = os.path.join(jindir, linkname)
             logger.info("{} -> {}".format(imagebase, link))
             os.symlink(os.path.abspath(image), link)

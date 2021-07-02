@@ -98,7 +98,9 @@ def create_preview(hdulist=None, binning=8, filename=None, delete_data=True):
         oy = _oy - layout.ota_range_y[0]
         (l, r), (b, t) = layout.get_ota_rect(ox, oy)
         l, r, b, t = map(int, (l, r, b, t))
-        preview_data[b:t, l:r] = norm(binned)
+        norm_binned = np.full_like(binned, np.nan)
+        norm_binned[~np.isnan(binned)] = norm(binned[~np.isnan(binned)])
+        preview_data[b:t, l:r] = norm_binned
         binned_data.append(binned)
         if hdulist._file.memmap and delete_data:
             del hdu.data  # possibly free some memory
